@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Reasons I Love You</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #05000a; font-family: 'Georgia', serif; }
+    canvas { display: block; }
+
+    /* --- Reason text: subtitle style, bottom of screen --- */
+    #reason {
+      position: absolute;
+      bottom: 12%;
+      left: 50%;
+      transform: translate(-50%, 24px);
+      color: #ffffff;
+      font-size: 1.5rem;
+      font-weight: 400;
+      font-style: italic;
+      text-align: center;
+      max-width: 78%;
+      letter-spacing: 0.5px;
+      line-height: 1.5;
+      text-shadow:
+        0 2px 24px rgba(0,0,0,0.95),
+        0 0 60px rgba(0,0,0,0.7);
+      pointer-events: none;
+      transition:
+        transform 1.4s cubic-bezier(0.2, 0.8, 0.2, 1),
+        opacity 1.4s ease;
+      opacity: 0;
+    }
+    #reason.show {
+      transform: translate(-50%, 0);
+      opacity: 1;
+    }
+
+    #hint {
+      position: absolute;
+      bottom: 30px;
+      width: 100%;
+      text-align: center;
+      color: #ffb3d1;
+      font-size: 0.85rem;
+      letter-spacing: 4px;
+      text-transform: lowercase;
+      opacity: 0.7;
+      animation: pulse 2.5s infinite;
+      pointer-events: none;
+      transition: opacity 1s ease;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 0.3; }
+      50% { opacity: 0.85; }
+    }
+
+    #vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: radial-gradient(ellipse at center,
+        rgba(0,0,0,0) 35%,
+        rgba(0,0,0,0.65) 100%);
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="vignette"></div>
+  <div id="reason"></div>
+  <div id="hint">click the heart</div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    }
+  }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+
+    // 💌 EDIT THIS LIST — put your own reasons here
+    const reasons = [
+      "Your laugh is my favorite sound",
+      "You make ordinary days feel magical",
+      "The way you scrunch your nose when you smile",
+      "You believe in me even when I don't",
+      "Your hugs fix everything",
+      "How you sing in the car like no one's watching",
+      "You're my calm in every storm",
+      "The way you love our little family",
+      "You still give me butterflies",
+      "Your kindness to strangers",
+      "How you always know what I'm thinking",
+      "You make me want to be a better man",
+      "The way you dance in the kitchen",
+      "Your patience with me",
+      "Every adventure feels better with you",
+      "You're my best friend",
+      "The way you say my name",
+      "You never gave up on us",
+      "Your smile on our wedding day",
+      "Simply... you being you",
+    ];
+
+    // =========================================================
+    //  SCENE / CAMERA / RENDERER
+    // =========================================================
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x05000a, 0.018);
+
+    const camera = new THREE.PerspectiveCamera(
+      60, window.innerWidth / window.innerHeight, 0.1, 1000
+    );
+    camera.position.set(0, 0.5, 20);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    // =========================================================
+    //  TEXTURE HELPERS
+    // =========================================================
+    function makeDotTexture() {
+      const size = 64;
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+      g.addColorStop(0, 'rgba(255,255,255,1)');
+      g.addColorStop(0.3, 'rgba(255,180,220,0.9)');
+      g.addColorStop(1, 'rgba(255,80,150,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+      return new THREE.CanvasTexture(c);
+    }
+
+    function makeGlowTexture() {
+      const size = 256;
+      const c = document.createElement('canvas');
+      c.width = c.height = size;
+      const ctx = c.getContext('2d');
+      const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+      g.addColorStop(0,   'rgba(255,255,255,1)');
+      g.addColorStop(0.15,'rgba(255,230,245,0.9)');
+      g.addColorStop(0.4, 'rgba(255,140,190,0.45)');
+      g.addColorStop(1,   'rgba(255,80,150,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, size, size);
+      return new THREE.CanvasTexture(c);
+    }
+
+    // =========================================================
+    //  HEART PARAMETRIC SHAPE
+    // =========================================================
+    function heartPoint(t) {
+      const x = 16 * Math.pow(Math.sin(t), 3);
+      const y = 13 * Math.cos(t) - 5 * Math.cos(2*t)
+              - 2 * Math.cos(3*t) - Math.cos(4*t);
+      return { x: x * 0.35, y: y * 0.35 };
+    }
+
+    // =========================================================
+    //  HEART PARTICLES
+    // =========================================================
+    const PARTICLE_COUNT = 2800;
+    const positions = new Float32Array(PARTICLE_COUNT * 3);
+    const targetPos = new Float32Array(PARTICLE_COUNT * 3);
+    const chaosPos  = new Float32Array(PARTICLE_COUNT * 3);
+    const colors    = new Float32Array(PARTICLE_COUNT * 3);
+    const progress  = new Float32Array(PARTICLE_COUNT);
+
+    const colorA = new THREE.Color(0xff2b6b);
+    const colorB = new THREE.Color(0xffc0d8);
+
+    for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const t = Math.random() * Math.PI * 2;
+      const p = heartPoint(t);
+      const fill = Math.pow(Math.random(), 0.55);
+      const hx = p.x * fill + (Math.random() - 0.5) * 0.6;
+      const hy = p.y * fill + (Math.random() - 0.5) * 0.6;
+      const hz = (Math.random() - 0.5) * 2.5;
+
+      targetPos[i*3]     = hx;
+      targetPos[i*3 + 1] = hy;
+      targetPos[i*3 + 2] = hz;
+
+      const r = 40 + Math.random() * 40;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      chaosPos[i*3]     = r * Math.sin(phi) * Math.cos(theta);
+      chaosPos[i*3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      chaosPos[i*3 + 2] = r * Math.cos(phi);
+
+      positions[i*3]     = chaosPos[i*3];
+      positions[i*3 + 1] = chaosPos[i*3 + 1];
+      positions[i*3 + 2] = chaosPos[i*3 + 2];
+
+      const c = colorA.clone().lerp(colorB, Math.random());
+      colors[i*3]     = c.r;
+      colors[i*3 + 1] = c.g;
+      colors[i*3 + 2] = c.b;
+
+      progress[i] = 0;
+    }
+
+    const heartGeo = new THREE.BufferGeometry();
+    heartGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    heartGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    const heartMat = new THREE.PointsMaterial({
+      size: 0.42,
+      map: makeDotTexture(),
+      vertexColors: true,
+      transparent: true,
+      opacity: 1.0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+
+    const heart = new THREE.Points(heartGeo, heartMat);
+    scene.add(heart);
+
+    // =========================================================
+    //  CENTRAL GLOW SPRITE (for inhale peak)
+    // =========================================================
+    const glowTex = makeGlowTexture();
+    const glowMat = new THREE.SpriteMaterial({
+      map: glowTex,
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const glowSprite = new THREE.Sprite(glowMat);
+    glowSprite.scale.set(4, 4, 1);
+    scene.add(glowSprite);
+
+    // =========================================================
+    //  REFLECTIVE FLOOR + MIRROR
+    // =========================================================
+    const floorGeo = new THREE.PlaneGeometry(200, 200);
+    const floorMat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: {
+        uTime:    { value: 0 },
+        uOpacity: { value: 0.35 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec2 vUv;
+        uniform float uTime;
+        uniform float uOpacity;
+        void main() {
+          float d = distance(vUv, vec2(0.5));
+          float fade = smoothstep(0.5, 0.05, d);
+          vec3 base = mix(vec3(0.02,0.0,0.04), vec3(0.20,0.03,0.12), fade);
+          float sheen = 0.05 * sin(vUv.y * 40.0 + uTime * 0.4);
+          base += vec3(sheen * 0.4, sheen * 0.1, sheen * 0.3);
+          gl_FragColor = vec4(base, fade * uOpacity);
+        }
+      `,
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -9.5;
+    scene.add(floor);
+
+    const mirrorMat = new THREE.PointsMaterial({
+      size: 0.42,
+      map: makeDotTexture(),
+      vertexColors: true,
+      transparent: true,
+      opacity: 0.20,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const heartMirror = new THREE.Points(heartGeo, mirrorMat);
+    heartMirror.scale.y = -1;
+    heartMirror.position.y = -19;
+    scene.add(heartMirror);
+
+    // =========================================================
+    //  BACKGROUND STARS
+    // =========================================================
+    const starGeo = new THREE.BufferGeometry();
+    const starPos = new Float32Array(900 * 3);
+    for (let i = 0; i < 900; i++) {
+      starPos[i*3]     = (Math.random() - 0.5) * 140;
+      starPos[i*3 + 1] = (Math.random() - 0.5) * 140;
+      starPos[i*3 + 2] = (Math.random() - 0.5) * 140 - 40;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({
+      size: 0.18, color: 0xffffff, transparent: true, opacity: 0.65,
+    }));
+    scene.add(stars);
+
+    // =========================================================
+    //  EMBERS
+    // =========================================================
+    const EMBER_COUNT = 180;
+    const emberGeo = new THREE.BufferGeometry();
+    const emberPos = new Float32Array(EMBER_COUNT * 3);
+    const emberSpeed = new Float32Array(EMBER_COUNT);
+    for (let i = 0; i < EMBER_COUNT; i++) {
+      emberPos[i*3]     = (Math.random() - 0.5) * 40;
+      emberPos[i*3 + 1] = -12 + Math.random() * 30;
+      emberPos[i*3 + 2] = (Math.random() - 0.5) * 20 - 2;
+      emberSpeed[i]     = 0.4 + Math.random() * 0.9;
+    }
+    emberGeo.setAttribute('position', new THREE.BufferAttribute(emberPos, 3));
+    const embers = new THREE.Points(emberGeo, new THREE.PointsMaterial({
+      size: 0.28,
+      map: makeDotTexture(),
+      color: 0xffc070,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    }));
+    scene.add(embers);
+
+    // =========================================================
+    //  STATE
+    // =========================================================
+    const reasonEl = document.getElementById('reason');
+    const hintEl = document.getElementById('hint');
+
+    let showing = false;
+    let lastIndex = -1;
+
+    // Camera push-in (Nolan #1)
+    let cameraTargetZ = 20;
+    let cameraCurrentZ = 20;
+
+    // Time dilation (Nolan #2)
+    let worldTimeScale = 1;
+    let worldTimeTarget = 1;
+
+    // Inhale animation state
+    let clickTimer = -1;      // seconds since click; -1 = inactive
+    let inhaleAmount = 0;     // 0 = normal, 1 = fully collapsed
+
+    // Heartbeat
+    let pulsePhase = 0;
+
+    function pickNextReason() {
+      let idx;
+      do { idx = Math.floor(Math.random() * reasons.length); }
+      while (idx === lastIndex && reasons.length > 1);
+      lastIndex = idx;
+      return reasons[idx];
+    }
+
+    function triggerReveal() {
+      if (showing) return;
+      showing = true;
+      hintEl.style.opacity = '0';
+
+      // Start inhale animation
+      clickTimer = 0;
+
+      // --- Silence gap: particles have reformed, world still ---
+      // --- Reason appears + camera push + time dilate ---
+      setTimeout(() => {
+        cameraTargetZ = 15.5;
+        worldTimeTarget = 0.15;
+        reasonEl.textContent = pickNextReason();
+        reasonEl.classList.add('show');
+      }, 1200);
+
+      // Reason fades out
+      setTimeout(() => {
+        reasonEl.classList.remove('show');
+      }, 4700);
+
+      // Camera pulls back, world resumes
+      setTimeout(() => {
+        cameraTargetZ = 20;
+        worldTimeTarget = 1;
+      }, 5300);
+
+      // Unlock
+      setTimeout(() => {
+        showing = false;
+      }, 5800);
+    }
+
+    renderer.domElement.addEventListener('click', triggerReveal);
+    renderer.domElement.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      triggerReveal();
+    }, { passive: false });
+
+    // =========================================================
+    //  ANIMATION LOOP
+    // =========================================================
+    const clock = new THREE.Clock();
+    let elapsed = 0;
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const rawDt = Math.min(clock.getDelta(), 0.05);
+
+      // Smooth time scale (Nolan #2)
+      worldTimeScale += (worldTimeTarget - worldTimeScale) * Math.min(rawDt * 2.2, 1);
+      const dt = rawDt * worldTimeScale;
+      elapsed += dt;
+
+      // ---------- inhale animation (B2) ----------
+      if (clickTimer >= 0) {
+        clickTimer += rawDt;
+        if (clickTimer < 0.4) {
+          // accelerate inward
+          const p = clickTimer / 0.4;
+          inhaleAmount = p * p;
+        } else if (clickTimer < 0.9) {
+          // explode back outward (smoothstep)
+          const p = (clickTimer - 0.4) / 0.5;
+          inhaleAmount = 1 - (p * p * (3 - 2 * p));
+        } else {
+          inhaleAmount = 0;
+          clickTimer = -1;
+        }
+      }
+
+      // ---------- particles: assembly + inhale ----------
+      const assemblySpeed = 0.55;
+      const collapseFactor = 1 - inhaleAmount * 0.97;
+
+      for (let i = 0; i < PARTICLE_COUNT; i++) {
+        if (progress[i] < 1) {
+          const stagger = (i % 37) / 37 * 0.5;
+          const raw = Math.max(0, Math.min(1,
+            (elapsed - stagger) * assemblySpeed
+          ));
+          progress[i] = 1 - Math.pow(1 - raw, 3);
+        }
+
+        const p = progress[i];
+        const ease = p * p * (3 - 2 * p);
+
+        let x = chaosPos[i*3]     * (1 - ease) + targetPos[i*3]     * ease;
+        let y = chaosPos[i*3 + 1] * (1 - ease) + targetPos[i*3 + 1] * ease;
+        let z = chaosPos[i*3 + 2] * (1 - ease) + targetPos[i*3 + 2] * ease;
+
+        // inhale collapse
+        x *= collapseFactor;
+        y *= collapseFactor;
+        z *= collapseFactor;
+
+        positions[i*3]     = x;
+        positions[i*3 + 1] = y;
+        positions[i*3 + 2] = z;
+      }
+      heartGeo.attributes.position.needsUpdate = true;
+
+      // ---------- central glow (peaks with inhale) ----------
+      const glowPeak = inhaleAmount * inhaleAmount;
+      glowMat.opacity = glowPeak * 0.95;
+      const gs = 4 + glowPeak * 8;
+      glowSprite.scale.set(gs, gs, 1);
+
+      // ---------- heartbeat (C1 squash-stretch + C3 brightness) ----------
+      pulsePhase += dt * 1.4;
+      const beatPos = pulsePhase % (Math.PI * 2);
+      const b1 = Math.exp(-Math.pow((beatPos - 0) / 0.35, 2));
+      const b2 = 0.55 * Math.exp(-Math.pow((beatPos - 1.1) / 0.45, 2));
+      const heartbeatActive = clickTimer < 0 ? 1 : 0;
+      const heartbeat = (b1 + b2) * heartbeatActive;
+
+      // Non-uniform scale: horizontal bulge, slight vertical, mild depth
+      const sX = 1 + heartbeat * 0.038;
+      const sY = 1 + heartbeat * 0.014;
+      const sZ = 1 + heartbeat * 0.024;
+      heart.scale.set(sX, sY, sZ);
+      heartMirror.scale.set(sX, -sY, sZ);
+
+      // Brightness pulse (additive blending: opacity = brightness)
+      heartMat.opacity = 0.82 + heartbeat * 0.18;
+      mirrorMat.opacity = 0.14 + heartbeat * 0.10;
+
+      // gentle rotation
+      heart.rotation.y = Math.sin(elapsed * 0.35) * 0.32;
+      heart.rotation.x = Math.sin(elapsed * 0.25) * 0.08;
+      heartMirror.rotation.y = heart.rotation.y;
+      heartMirror.rotation.x = -heart.rotation.x;
+
+      // ---------- embers drift (affected by time dilation) ----------
+      const emberArr = emberGeo.attributes.position.array;
+      for (let i = 0; i < EMBER_COUNT; i++) {
+        emberArr[i*3 + 1] += emberSpeed[i] * dt * 1.2;
+        emberArr[i*3]     += Math.sin(elapsed + i) * 0.002;
+        if (emberArr[i*3 + 1] > 20) {
+          emberArr[i*3 + 1] = -12;
+          emberArr[i*3]     = (Math.random() - 0.5) * 40;
+          emberArr[i*3 + 2] = (Math.random() - 0.5) * 20 - 2;
+        }
+      }
+      emberGeo.attributes.position.needsUpdate = true;
+
+      // ---------- stars drift (affected by time dilation) ----------
+      stars.rotation.y += dt * 0.015;
+
+      // ---------- camera push-in (Nolan #1) ----------
+      cameraCurrentZ += (cameraTargetZ - cameraCurrentZ) * Math.min(rawDt * 1.6, 1);
+      camera.position.z = cameraCurrentZ;
+      camera.lookAt(0, 0, 0);
+
+      // ---------- floor shader time ----------
+      floorMat.uniforms.uTime.value = elapsed;
+
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    // =========================================================
+    //  RESIZE
+    // =========================================================
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
